@@ -180,6 +180,7 @@ def class_requires_deps(*deps):
 # `is_extra_available` can still verify individual packages are present.
 _FALLBACK_EXTRA_DEPS = {
     "ocr-hf": ["accelerate", "einops", "torch", "transformers"],
+    "serving": ["aiohttp", "fastapi", "starlette", "uvicorn"],
 }
 
 

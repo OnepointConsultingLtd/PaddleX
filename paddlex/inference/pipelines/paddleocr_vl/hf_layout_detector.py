@@ -93,8 +93,14 @@ def _detect_version_from_config(model_dir: str) -> str:
     return "v3"
 
 
-def _load_model_and_processor(model_dir: str, version: str):
-    """Import and instantiate the correct transformers classes for *version*."""
+def _load_model_and_processor(model_dir: str, version: str, device: str = "cpu"):
+    """Import and instantiate the correct transformers classes for *version*.
+
+    *device* is forwarded to ``from_pretrained`` so weights land on the target
+    device immediately, avoiding the meta-tensor error that occurs when
+    ``model.to(device)`` is called after ``accelerate`` has already placed
+    tensors on the "meta" device during a concurrent load.
+    """
     entry = _VERSION_MAP.get(version)
     if entry is None:
         raise ValueError(
@@ -122,7 +128,7 @@ def _load_model_and_processor(model_dir: str, version: str):
         ) from exc
 
     processor = processor_cls.from_pretrained(model_dir)
-    model = model_cls.from_pretrained(model_dir)
+    model = model_cls.from_pretrained(model_dir, device_map=device)
     return model, processor
 
 
@@ -204,10 +210,9 @@ class HFLayoutDetector:
         self.model_version = model_version.lower()
 
         self._model, self._processor = _load_model_and_processor(
-            model_dir, self.model_version
+            model_dir, self.model_version, device=self._device
         )
         self._model.eval()
-        self._model = self._model.to(self._device)
         self._id2label: Dict[int, str] = self._model.config.id2label
 
     # ------------------------------------------------------------------

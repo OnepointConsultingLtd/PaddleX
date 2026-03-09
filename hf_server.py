@@ -44,7 +44,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import threading
 from typing import Any, AsyncGenerator, List, Optional
 
 import aiohttp
@@ -473,33 +472,13 @@ def main() -> None:
         + (f"  [device={args.device}]" if args.device else "")
     )
 
-    # Load all pipeline instances. Each instance gets its own thread inside
-    # PipelineWrapper, so loading them in parallel here reduces startup time.
-    pipelines: list = [None] * args.pool_size
-    errors: list = []
-    lock = threading.Lock()
-
-    def _load(idx: int) -> None:
-        try:
-            p = create_pipeline(pipeline=args.config, device=args.device)
-            pipelines[idx] = p
-        except Exception as exc:
-            with lock:
-                errors.append(exc)
-
-    threads = [
-        threading.Thread(target=_load, args=(i,), daemon=False)
-        for i in range(args.pool_size)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    if errors:
-        raise RuntimeError(
-            f"Failed to load {len(errors)} pipeline instance(s)"
-        ) from errors[0]
+    # Load pipeline instances sequentially to avoid HuggingFace cache races
+    # and the meta-tensor error that occurs when multiple threads call
+    # from_pretrained on the same model directory at the same time.
+    pipelines: list = []
+    for i in range(args.pool_size):
+        print(f"  Loading instance {i + 1}/{args.pool_size}...")
+        pipelines.append(create_pipeline(pipeline=args.config, device=args.device))
 
     print(
         f"All {args.pool_size} pipeline instance(s) loaded. "

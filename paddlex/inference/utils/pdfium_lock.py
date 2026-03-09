@@ -29,3 +29,7 @@ pypdfium2 operations across the application.
 import threading
 
 pdfium_lock = threading.Lock()
+
+# Scale factor used when rendering PDF pages to images via pypdfium2.
+# Higher values produce sharper images at the cost of more memory.
+PDF_RENDER_SCALE = 4
