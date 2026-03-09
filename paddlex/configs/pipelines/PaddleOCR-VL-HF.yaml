@@ -1,0 +1,99 @@
+# PaddleOCR-VL pipeline configuration using HuggingFace Transformers backends.
+#
+# Replaces ALL PaddlePaddle model inference with pure-PyTorch / HuggingFace
+# Transformers implementations — no PaddlePaddle installation required.
+#
+#   Layout detection  →  PPDocLayoutV2/V3ForObjectDetection (transformers)
+#   VL recognition    →  any AutoModelForImageTextToText model (e.g. Qwen2.5-VL)
+#
+# Requirements:
+#   pip install torch torchvision transformers accelerate einops
+#   # transformers >= 4.51.0 required for PPDocLayoutV2/V3 support
+#
+# Usage:
+#   from paddlex import create_pipeline
+#   pipeline = create_pipeline(pipeline="paddlex/configs/pipelines/PaddleOCR-VL-HF.yaml")
+#   for result in pipeline.predict("document.pdf"):
+#       print(result.markdown)
+
+pipeline_name: PaddleOCR-VL
+
+batch_size: 8
+
+use_queues: False
+
+use_doc_preprocessor: False   # DocPreprocessor requires PaddlePaddle; keep False
+use_layout_detection: True
+use_chart_recognition: False
+format_block_content: False
+merge_layout_blocks: True
+markdown_ignore_labels:
+  - number
+  - footnote
+  - header
+  - header_image
+  - footer
+  - footer_image
+  - aside_text
+
+SubModules:
+  LayoutDetection:
+    # ---------------------------------------------------------------
+    # HuggingFace layout detector — PP-DocLayoutV2 or PP-DocLayoutV3
+    # ---------------------------------------------------------------
+    use_hf_backend: true
+
+    # model_version selects which transformers classes are loaded:
+    #
+    #   "v2"  →  PPDocLayoutV2ForObjectDetection
+    #            Outputs bounding boxes only (no polygon masks).
+    #            Lighter and faster; good for well-scanned flat documents.
+    #            HF repo: PaddlePaddle/PP-DocLayoutV2_safetensors
+    #
+    #   "v3"  →  PPDocLayoutV3ForObjectDetection
+    #            Outputs bounding boxes + polygon points from instance masks.
+    #            Better for skewed, curved, or screen-photographed documents.
+    #            HF repo: PaddlePaddle/PP-DocLayoutV3_safetensors
+    #
+    #   null / omit  →  auto-detected from the model's config.json
+    #
+    model_version: "v3"   # change to "v2" to use PP-DocLayoutV2
+
+    # Local directory path OR HuggingFace Hub repo id (auto-downloads).
+    # V3:  "PaddlePaddle/PP-DocLayoutV3_safetensors"
+    # V2:  "PaddlePaddle/PP-DocLayoutV2_safetensors"
+    model_dir: "PaddlePaddle/PP-DocLayoutV3_safetensors"
+
+    # Device: "cpu", "gpu", "gpu:0", "cuda", "cuda:0"
+    device: cpu
+
+    batch_size: 1
+    threshold: 0.5
+    layout_nms: true
+    layout_nms_iou_threshold: 0.5
+
+  VLRecognition:
+    # ---------------------------------------------------------------
+    # HuggingFace VLM — any AutoModelForImageTextToText-compatible model
+    # Tested with Qwen2-VL and Qwen2.5-VL.
+    # ---------------------------------------------------------------
+    use_hf_backend: true
+
+    # Local directory path OR HuggingFace Hub repo id (auto-downloads).
+    # Examples:
+    #   "Qwen/Qwen2.5-VL-3B-Instruct"
+    #   "Qwen/Qwen2-VL-7B-Instruct"
+    model_dir: "Qwen/Qwen2.5-VL-3B-Instruct"
+
+    # Device: "cpu", "gpu", "gpu:0", "cuda", "cuda:0", or "auto"
+    # "auto" lets accelerate distribute layers across available GPUs.
+    device: auto
+
+    batch_size: 8
+
+    # Weight dtype: "float32", "float16", or "bfloat16"
+    torch_dtype: bfloat16
+
+    # Dynamic-resolution image processing bounds (Qwen2-VL style).
+    # min_pixels: 112896
+    # max_pixels: 1003520

@@ -17,7 +17,7 @@ import re
 import threading
 import time
 from itertools import chain
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 from PIL import Image
@@ -28,7 +28,6 @@ from ...common.batch_sampler import ImageBatchSampler
 from ...common.reader import ReadImage
 from ...utils.benchmark import benchmark
 from ...utils.hpi import HPIConfig
-from ...utils.pp_option import PaddlePredictorOption
 from .._parallel import AutoParallelImageSimpleInferencePipeline
 from ..base import BasePipeline
 from ..components import CropByBoxes
@@ -48,6 +47,9 @@ from .uilts import (
     untokenize_figure_of_table,
 )
 
+if TYPE_CHECKING:
+    from ...utils.pp_option import PaddlePredictorOption
+
 IMAGE_LABELS = ["image", "header_image", "footer_image"]
 
 
@@ -59,7 +61,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         self,
         config: Dict,
         device: Optional[str] = None,
-        pp_option: Optional[PaddlePredictorOption] = None,
+        pp_option: Optional[Any] = None,
         use_hpip: bool = False,
         hpi_config: Optional[Union[Dict[str, Any], HPIConfig]] = None,
         initial_predictor: bool = True,
@@ -101,33 +103,38 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     "LayoutDetection",
                     {"model_config_error": "config error for layout_det_model!"},
                 )
-                model_name = layout_det_config.get("model_name", None)
-                assert model_name is not None and model_name in [
-                    "PP-DocLayoutV2",
-                    "PP-DocLayoutV3",
-                ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
-                layout_kwargs = {}
-                if (threshold := layout_det_config.get("threshold", None)) is not None:
-                    layout_kwargs["threshold"] = threshold
-                if (
-                    layout_nms := layout_det_config.get("layout_nms", None)
-                ) is not None:
-                    layout_kwargs["layout_nms"] = layout_nms
-                if (
-                    layout_unclip_ratio := layout_det_config.get(
-                        "layout_unclip_ratio", None
+                if layout_det_config.get("use_hf_backend", False):
+                    self.layout_det_model = self._create_hf_layout_detector(
+                        layout_det_config, device
                     )
-                ) is not None:
-                    layout_kwargs["layout_unclip_ratio"] = layout_unclip_ratio
-                if (
-                    layout_merge_bboxes_mode := layout_det_config.get(
-                        "layout_merge_bboxes_mode", None
+                else:
+                    model_name = layout_det_config.get("model_name", None)
+                    assert model_name is not None and model_name in [
+                        "PP-DocLayoutV2",
+                        "PP-DocLayoutV3",
+                    ], "model_name must be PP-DocLayoutV2 or PP-DocLayoutV3"
+                    layout_kwargs = {}
+                    if (threshold := layout_det_config.get("threshold", None)) is not None:
+                        layout_kwargs["threshold"] = threshold
+                    if (
+                        layout_nms := layout_det_config.get("layout_nms", None)
+                    ) is not None:
+                        layout_kwargs["layout_nms"] = layout_nms
+                    if (
+                        layout_unclip_ratio := layout_det_config.get(
+                            "layout_unclip_ratio", None
+                        )
+                    ) is not None:
+                        layout_kwargs["layout_unclip_ratio"] = layout_unclip_ratio
+                    if (
+                        layout_merge_bboxes_mode := layout_det_config.get(
+                            "layout_merge_bboxes_mode", None
+                        )
+                    ) is not None:
+                        layout_kwargs["layout_merge_bboxes_mode"] = layout_merge_bboxes_mode
+                    self.layout_det_model = self.create_model(
+                        layout_det_config, **layout_kwargs
                     )
-                ) is not None:
-                    layout_kwargs["layout_merge_bboxes_mode"] = layout_merge_bboxes_mode
-                self.layout_det_model = self.create_model(
-                    layout_det_config, **layout_kwargs
-                )
 
             self.use_chart_recognition = config.get("use_chart_recognition", False)
             self.use_seal_recognition = config.get("use_seal_recognition", False)
@@ -137,7 +144,13 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 {"model_config_error": "config error for vl_rec_model!"},
             )
 
-            self.vl_rec_model = self.create_model(vl_rec_config)
+            if vl_rec_config.get("use_hf_backend", False):
+                self.vl_rec_model = self._create_hf_vlm_predictor(
+                    vl_rec_config, device
+                )
+            else:
+                self.vl_rec_model = self.create_model(vl_rec_config)
+
             self.format_block_content = config.get("format_block_content", False)
             self.use_ocr_for_image_block = config.get("use_ocr_for_image_block", False)
 
@@ -165,6 +178,92 @@ class _PaddleOCRVLPipeline(BasePipeline):
     def close(self):
         if hasattr(self, "vl_rec_model"):
             self.vl_rec_model.close()
+
+    # ------------------------------------------------------------------
+    # HuggingFace backend factory helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _create_hf_layout_detector(config: Dict, pipeline_device: Optional[str]):
+        """Instantiate an :class:`HFLayoutDetector` from a config dict.
+
+        The config dict may contain:
+        - ``model_dir`` (required when using the HF backend)
+        - ``device`` (overrides the pipeline-level device when present)
+        - ``batch_size``
+        - ``threshold``
+        - ``layout_nms``
+        - ``layout_nms_iou_threshold``
+        """
+        from .hf_layout_detector import HFLayoutDetector
+
+        model_dir = config.get("model_dir", None)
+        if not model_dir:
+            raise ValueError(
+                "LayoutDetection config must include 'model_dir' when "
+                "'use_hf_backend' is True."
+            )
+        device = config.get("device", pipeline_device or "cpu")
+        batch_size = config.get("batch_size", 1)
+        threshold = config.get("threshold", 0.5)
+        layout_nms = config.get("layout_nms", True)
+        layout_nms_iou_threshold = config.get("layout_nms_iou_threshold", 0.5)
+        # None → auto-detect from config.json architectures field
+        model_version = config.get("model_version", None)
+        logging.info(
+            "Creating HF layout detector: model_dir=%s  device=%s  version=%s",
+            model_dir,
+            device,
+            model_version or "auto",
+        )
+        return HFLayoutDetector(
+            model_dir=model_dir,
+            model_version=model_version,
+            device=device,
+            batch_size=batch_size,
+            threshold=threshold,
+            layout_nms=layout_nms,
+            layout_nms_iou_threshold=layout_nms_iou_threshold,
+        )
+
+    @staticmethod
+    def _create_hf_vlm_predictor(config: Dict, pipeline_device: Optional[str]):
+        """Instantiate an :class:`HFVLMPredictor` from a config dict.
+
+        The config dict may contain:
+        - ``model_dir`` (required)
+        - ``device`` (overrides pipeline-level device when present)
+        - ``batch_size``
+        - ``torch_dtype`` (``"float32"``, ``"float16"``, ``"bfloat16"``)
+        - ``min_pixels`` / ``max_pixels``
+        """
+        from .hf_vlm_predictor import HFVLMPredictor
+
+        model_dir = config.get("model_dir", None)
+        if not model_dir:
+            raise ValueError(
+                "VLRecognition config must include 'model_dir' when "
+                "'use_hf_backend' is True."
+            )
+        device = config.get("device", pipeline_device or "auto")
+        batch_size = config.get("batch_size", 1)
+        torch_dtype = config.get("torch_dtype", "bfloat16")
+        min_pixels = config.get("min_pixels", None)
+        max_pixels = config.get("max_pixels", None)
+        logging.info(
+            "Creating HF VLM predictor: model_dir=%s  device=%s  dtype=%s",
+            model_dir,
+            device,
+            torch_dtype,
+        )
+        return HFVLMPredictor(
+            model_dir=model_dir,
+            device=device,
+            batch_size=batch_size,
+            torch_dtype=torch_dtype,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+        )
 
     def get_model_settings(
         self,
@@ -1063,11 +1162,11 @@ class _BasePaddleOCRVLPipeline(AutoParallelImageSimpleInferencePipeline):
         return config.get("batch_size", 1)
 
 
-@pipeline_requires_extra("ocr")
+@pipeline_requires_extra("ocr", alt="ocr-hf")
 class PaddleOCRVLPipeline(_BasePaddleOCRVLPipeline):
     entities = "PaddleOCR-VL"
 
 
-@pipeline_requires_extra("ocr")
+@pipeline_requires_extra("ocr", alt="ocr-hf")
 class PaddleOCRVL15Pipeline(_BasePaddleOCRVLPipeline):
     entities = "PaddleOCR-VL-1.5"

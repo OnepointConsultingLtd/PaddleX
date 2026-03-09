@@ -21,6 +21,7 @@ from pathlib import Path
 from setuptools import find_packages, setup
 
 BASE_DEP_SPECS = {
+    "accelerate": "",
     "aiohttp": ">= 3.9",
     "aistudio-sdk": ">=0.3.5",
     "bce-python-sdk": ">= 0.9",
@@ -77,6 +78,8 @@ BASE_DEP_SPECS = {
     "soundfile": "",
     "tiktoken": "",
     "tokenizers": ">= 0.19",
+    "torch": "",
+    "transformers": ">= 4.39.0",
     "tqdm": "",
     "typing-extensions": "",
     "ujson": "",
@@ -231,6 +234,16 @@ EXTRAS = {
             "transformers < 5.0.0",
             "uvloop",
             "vllm == 0.10.2",
+        ],
+        # PaddlePaddle-free OCR-VL inference using HuggingFace Transformers.
+        # Enables HFLayoutDetector (PP-DocLayoutV3 via transformers) and
+        # HFVLMPredictor (any AutoModelForVision2Seq-compatible VLM).
+        # Usage:  pip install paddlex[ocr-hf]
+        "ocr-hf": [
+            "accelerate",
+            "einops",
+            "torch",
+            "transformers >= 4.50.0",
         ],
         "paddle2onnx": [
             "paddle2onnx == 2.0.2rc3",

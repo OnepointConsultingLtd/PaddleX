@@ -1,0 +1,71 @@
+# PaddleOCR-VL pipeline configuration using HuggingFace Transformers backends.
+#
+# This config replaces ALL PaddlePaddle model inference with pure-PyTorch /
+# HuggingFace Transformers implementations:
+#
+#   Layout detection  →  PPDocLayoutV3ForObjectDetection (transformers)
+#   VL recognition    →  any AutoModelForVision2Seq model (e.g. Qwen2.5-VL)
+#
+# Requirements (no PaddlePaddle needed):
+#   pip install paddlex[ocr-hf]
+#   # or manually: pip install torch transformers accelerate
+#
+# Usage:
+#   from paddlex import create_pipeline
+#   pipeline = create_pipeline(pipeline="PaddleOCR-VL", config="path/to/this/file.yaml")
+#   for result in pipeline.predict("document.pdf"):
+#       print(result.markdown)
+#
+# Model download examples:
+#   Layout: huggingface-cli download PaddlePaddle/PP-DocLayoutV3 --local-dir ./PP-DocLayoutV3
+#   VLM:    huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct  --local-dir ./Qwen2.5-VL-3B
+
+pipeline_name: PaddleOCR-VL
+
+batch_size: 8
+
+use_queues: False
+
+use_doc_preprocessor: False   # DocPreprocessor requires PaddlePaddle; set to False
+use_layout_detection: True
+use_chart_recognition: False
+format_block_content: False
+merge_layout_blocks: True
+markdown_ignore_labels:
+  - number
+  - footnote
+  - header
+  - header_image
+  - footer
+  - footer_image
+  - aside_text
+
+SubModules:
+  LayoutDetection:
+    # ---------------------------------------------------------------
+    # HuggingFace backend for PP-DocLayoutV3
+    # ---------------------------------------------------------------
+    use_hf_backend: true
+
+    # Path to a local directory that contains the HF-format model, or a
+    # HuggingFace Hub repo id (e.g. "PaddlePaddle/PP-DocLayoutV3").
+    # Set to a local path or a HuggingFace Hub repo id.
+    # The repo id "PaddlePaddle/PP-DocLayoutV3" will auto-download on first run.
+    model_dir: "PaddlePaddle/PP-DocLayoutV3_safetensors"
+
+    # Device: "cpu", "gpu", "gpu:0", "cuda", "cuda:0"
+    device: cpu
+
+    batch_size: 1
+    threshold: 0.5
+    layout_nms: true
+    layout_nms_iou_threshold: 0.5
+
+  VLRecognition:
+    module_name: vl_recognition
+    model_name: PaddleOCR-VL-1.5-0.9B
+    model_dir: null
+    batch_size: 4096
+    genai_config:
+      backend: vllm-server
+      server_url: http://127.0.0.1:8118/v1

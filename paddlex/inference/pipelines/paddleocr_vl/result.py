@@ -671,9 +671,9 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin):
                     )
             if handle_func:
                 markdown_content += (
-                    "\n\n" + handle_func(block)
+                    f'\n\n<!-- block id="{idx}" -->\n' + handle_func(block)
                     if markdown_content
-                    else handle_func(block)
+                    else f'<!-- block id="{idx}" -->\n' +  handle_func(block)
                 )
 
         markdown_info["page_index"] = self["page_index"]

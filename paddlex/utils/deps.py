@@ -175,8 +175,34 @@ def class_requires_deps(*deps):
     return _deco
 
 
+# Fallback dep lists used when the package is installed without extras
+# (e.g. `pip install -e .`).  These mirror the entries in setup.py so that
+# `is_extra_available` can still verify individual packages are present.
+_FALLBACK_EXTRA_DEPS = {
+    "ocr-hf": ["accelerate", "einops", "torch", "transformers"],
+}
+
+
 @lru_cache()
 def is_extra_available(extra):
+    if extra not in EXTRAS:
+        # Package was installed without recording this extra in metadata.
+        # Fall back to checking the known dep list directly.
+        deps = _FALLBACK_EXTRA_DEPS.get(extra)
+        if deps is None:
+            logging.debug(
+                "Extra %r is not in installed metadata and has no fallback dep list.",
+                extra,
+            )
+            return False
+        flags = [is_dep_available(dep) for dep in deps]
+        if not all(flags):
+            logging.debug(
+                "Extra %r (fallback check): these dependencies are not available: %s",
+                extra,
+                [d for d, f in zip(deps, flags) if not f],
+            )
+        return all(flags)
     flags = [is_dep_available(dep) for dep in EXTRAS[extra]]
     if all(flags):
         return True
