@@ -54,7 +54,7 @@ SubModules:
     model_dir: "PaddlePaddle/PP-DocLayoutV3_safetensors"
 
     # Device: "cpu", "gpu", "gpu:0", "cuda", "cuda:0"
-    device: cpu
+    device: gpu
 
     batch_size: 1
     threshold: 0.5
