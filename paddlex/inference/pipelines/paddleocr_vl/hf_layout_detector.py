@@ -282,26 +282,32 @@ class HFLayoutDetector:
             hw_list.append((h, w))
             pil_list.append(_PIL_Image.fromarray(img_bgr[:, :, ::-1]))
 
-        # One forward pass with batch size == len(images) (matches request size).
-        # _GPU_LOCK serialises CUDA work across pool threads so cuDNN
-        # batch-norm doesn't collide (CUDNN_STATUS_NOT_SUPPORTED… error).
+        inputs = self._processor(images=pil_list, return_tensors="pt")
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        # _GPU_LOCK serialises the forward pass across pool threads.
+        # cuDNN is disabled inside the lock because its batch-norm kernel is
+        # not safe when multiple threads share the same CUDA context, even
+        # serialised — the cuDNN handle itself is per-process, not per-thread.
         with _GPU_LOCK:
-            inputs = self._processor(images=pil_list, return_tensors="pt")
-            inputs = {k: v.to(self._device) for k, v in inputs.items()}
+            prev_cudnn = torch.backends.cudnn.enabled
+            torch.backends.cudnn.enabled = False
+            try:
+                with torch.no_grad():
+                    outputs = self._model(**inputs)
+            finally:
+                torch.backends.cudnn.enabled = prev_cudnn
 
-            with torch.no_grad():
-                outputs = self._model(**inputs)
-
-            target_sizes = torch.tensor(
-                [[h, w] for h, w in hw_list],
-                device=self._device,
-                dtype=torch.long,
-            )
-            raw_list = self._processor.post_process_object_detection(
-                outputs,
-                threshold=score_threshold,
-                target_sizes=target_sizes,
-            )
+        target_sizes = torch.tensor(
+            [[h, w] for h, w in hw_list],
+            device=self._device,
+            dtype=torch.long,
+        )
+        raw_list = self._processor.post_process_object_detection(
+            outputs,
+            threshold=score_threshold,
+            target_sizes=target_sizes,
+        )
         # Some processor versions return a single dict when batch_size == 1.
         if isinstance(raw_list, dict):
             raw_list = [raw_list]
