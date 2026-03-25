@@ -41,9 +41,7 @@ RUN pip install --no-cache-dir \
 COPY . /app/PaddleX
 WORKDIR /app/PaddleX
 
-RUN pip install --no-cache-dir -e ".[ocr,ocr-hf,serving]" \
-    && find /app/PaddleX -name '*.pyc' -delete \
-    && find /app/PaddleX -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; true
+RUN pip install --no-cache-dir -e ".[ocr,ocr-hf,serving]"
 
 EXPOSE 8080
 
