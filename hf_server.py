@@ -46,6 +46,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
@@ -543,25 +544,48 @@ def _get_inner_pipeline(pipeline: Any) -> Any:
     return pipeline
 
 
-def _share_layout_detector(pipelines: list) -> None:
-    """Replace every pipeline's layout_det_model with the first one's.
+def _load_pipelines(
+    config_path: str, pool_size: int, device: Optional[str]
+) -> list:
+    """Load *pool_size* pipeline instances, sharing one layout detector.
+
+    The first pipeline is loaded normally (including the GPU layout model).
+    Subsequent pipelines receive a config copy with ``use_layout_detection``
+    set to ``False`` so they skip loading their own detector.  After loading,
+    the first pipeline's ``layout_det_model`` is injected into every instance.
 
     This avoids loading N copies of PP-DocLayoutV3 on the same GPU, which
-    exhausts cuDNN workspace memory.  The _GPU_LOCK inside HFLayoutDetector
-    already serialises the forward pass, so a single shared instance is
-    thread-safe.
+    exhausts cuDNN workspace and causes
+    ``CUDNN_STATUS_NOT_SUPPORTED_SUBLIBRARY_UNAVAILABLE``.
     """
-    if len(pipelines) <= 1:
-        return
-    inner_first = _get_inner_pipeline(pipelines[0])
-    shared_det = getattr(inner_first, "layout_det_model", None)
-    if shared_det is None:
-        return
-    for p in pipelines[1:]:
-        inner = _get_inner_pipeline(p)
-        if hasattr(inner, "layout_det_model"):
-            inner.layout_det_model = shared_det
-    print(f"  Shared layout detector across {len(pipelines)} pool instance(s)")
+    from paddlex.inference.pipelines import load_pipeline_config
+
+    base_config = load_pipeline_config(config_path)
+
+    print(f"  Loading instance 1/{pool_size} (with layout detector)...")
+    first = create_pipeline(config=copy.deepcopy(base_config), device=device)
+    pipelines = [first]
+
+    if pool_size > 1:
+        inner_first = _get_inner_pipeline(first)
+        shared_det = getattr(inner_first, "layout_det_model", None)
+        use_ld = getattr(inner_first, "use_layout_detection", True)
+
+        for i in range(1, pool_size):
+            print(f"  Loading instance {i + 1}/{pool_size} (layout detector shared)...")
+            cfg = copy.deepcopy(base_config)
+            cfg["use_layout_detection"] = False
+            p = create_pipeline(config=cfg, device=device)
+            inner = _get_inner_pipeline(p)
+            if shared_det is not None:
+                inner.layout_det_model = shared_det
+                inner.use_layout_detection = use_ld
+            pipelines.append(p)
+
+        if shared_det is not None:
+            print(f"  Shared layout detector across {pool_size} pool instance(s)")
+
+    return pipelines
 
 
 # ---------------------------------------------------------------------------
@@ -614,21 +638,7 @@ def main() -> None:
         + (f"  [device={args.device}]" if args.device else "")
     )
 
-    # Load pipeline instances sequentially to avoid HuggingFace cache races
-    # and the meta-tensor error that occurs when multiple threads call
-    # from_pretrained on the same model directory at the same time.
-    pipelines: list = []
-    for i in range(args.pool_size):
-        print(f"  Loading instance {i + 1}/{args.pool_size}...")
-        pipelines.append(create_pipeline(pipeline=args.config, device=args.device))
-
-    # Share a single layout-detector across all pool instances.
-    # cuDNN batch-norm is not safe with multiple model copies on the same GPU:
-    # loading N copies exhausts GPU workspace memory and causes
-    # CUDNN_STATUS_NOT_SUPPORTED_SUBLIBRARY_UNAVAILABLE.
-    # A module-level _GPU_LOCK in HFLayoutDetector already serialises
-    # the forward pass, so sharing one model is safe and correct.
-    _share_layout_detector(pipelines)
+    pipelines = _load_pipelines(args.config, args.pool_size, args.device)
 
     print(
         f"All {args.pool_size} pipeline instance(s) loaded. "
