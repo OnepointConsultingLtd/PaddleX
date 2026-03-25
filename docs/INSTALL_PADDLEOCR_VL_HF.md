@@ -164,7 +164,7 @@ Same as Linux x86_64 (`hf_server.py` + `curl` health check). Expect layout/VLM w
 
 ## Docker (Linux x86_64 + NVIDIA GPU)
 
-The Dockerfile uses **`nvcr.io/nvidia/vllm:26.02-py3`** (NVIDIA NGC “vLLM” container). It already includes a CUDA-capable PyTorch stack; the build adds **transformers**, **torchvision**, and an editable **PaddleX** install with `[ocr,ocr-hf,serving]`.
+The Dockerfile uses **`nvcr.io/nvidia/vllm:26.02-py3`** (NVIDIA NGC “vLLM” container). It already includes a CUDA-capable PyTorch stack; the build installs **transformers from the upstream Git repo** (`git+https://github.com/huggingface/transformers.git`), then **torchvision**, **accelerate**, **filetype**, **openai**, and an editable **PaddleX** install with `[ocr,ocr-hf,serving]`.
 
 ### Prerequisites
 

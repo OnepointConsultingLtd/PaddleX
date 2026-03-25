@@ -28,19 +28,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Base image includes torch; pin transformers/accelerate for PP-DocLayout + Qwen2-VL style models.
-# torchvision: required by PP-DocLayoutV3 image processors in transformers.
+# torchvision / helpers before PaddleX; `git` is for the final transformers VCS install.
 RUN pip install --no-cache-dir \
-    "transformers>=4.50.0,<6" \
     "accelerate>=0.26" \
     "filetype>=1.2" \
-    "torchvision"
+    "torchvision" \
+    "openai"
 
 # Install PaddleX from build context (repository root).
 COPY . /app/PaddleX
 WORKDIR /app/PaddleX
 
 RUN pip install --no-cache-dir -e ".[ocr,ocr-hf,serving]"
+
+# Latest transformers from GitHub (default branch). Must run *after* editable install,
+# otherwise `ocr-hf` pulls PyPI transformers and replaces this.
+RUN pip install --no-cache-dir "git+https://github.com/huggingface/transformers.git"
 
 EXPOSE 8080
 
