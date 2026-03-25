@@ -135,6 +135,10 @@ def _load_model_and_processor(model_dir: str, version: str, device: str = "cpu")
 class HFLayoutDetector:
     """Transformer-based document-layout detector for PP-DocLayoutV2/V3.
 
+    A single forward pass is used per ``__call__``, with batch size equal to
+    ``len(images)``. The ``batch_size`` field in YAML mainly affects pipeline
+    queue batching, not this detector's internal tensor batching.
+
     Exposes the same callable interface as the PaddlePaddle
     ``LayoutAnalysisPredictor`` so it is a drop-in replacement inside
     :class:`~paddlex.inference.pipelines.paddleocr_vl.pipeline._PaddleOCRVLPipeline`.
@@ -259,79 +263,112 @@ class HFLayoutDetector:
             self.model_version == "v3" and layout_shape_mode != "rect"
         )
 
+        if not images:
+            return
+
+        import torch
+        from PIL import Image as _PIL_Image
+
+        pil_list = []
+        hw_list: List[Tuple[int, int]] = []
         for img_bgr in images:
-            from PIL import Image as _PIL_Image
-
             h, w = img_bgr.shape[:2]
-            pil_img = _PIL_Image.fromarray(img_bgr[:, :, ::-1])
+            hw_list.append((h, w))
+            pil_list.append(_PIL_Image.fromarray(img_bgr[:, :, ::-1]))
 
-            inputs = self._processor(images=[pil_img], return_tensors="pt")
-            inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        # One forward pass with batch size == len(images) (matches request size).
+        inputs = self._processor(images=pil_list, return_tensors="pt")
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
-            with torch.no_grad():
-                outputs = self._model(**inputs)
+        with torch.no_grad():
+            outputs = self._model(**inputs)
 
-            target_sizes = torch.tensor([[h, w]], device=self._device)
-            raw = self._processor.post_process_object_detection(
-                outputs,
-                threshold=score_threshold,
-                target_sizes=target_sizes,
+        target_sizes = torch.tensor(
+            [[h, w] for h, w in hw_list],
+            device=self._device,
+            dtype=torch.long,
+        )
+        raw_list = self._processor.post_process_object_detection(
+            outputs,
+            threshold=score_threshold,
+            target_sizes=target_sizes,
+        )
+        # Some processor versions return a single dict when batch_size == 1.
+        if isinstance(raw_list, dict):
+            raw_list = [raw_list]
+
+        for result, (h, w) in zip(raw_list, hw_list):
+            yield self._detection_result_to_page(
+                result,
+                h,
+                w,
+                apply_nms=apply_nms,
+                layout_unclip_ratio=layout_unclip_ratio,
+                want_polygons=want_polygons,
             )
-            result = raw[0]
 
-            scores = result["scores"].cpu().numpy()
-            label_ids = result["labels"].cpu().numpy()
-            boxes = result["boxes"].cpu().numpy()
+    def _detection_result_to_page(
+        self,
+        result: Dict,
+        h: int,
+        w: int,
+        *,
+        apply_nms: bool,
+        layout_unclip_ratio: Optional[Union[float, Tuple[float, float], dict]],
+        want_polygons: bool,
+    ) -> Dict:
+        """Turn one ``post_process_object_detection`` output dict into page res."""
+        scores = result["scores"].cpu().numpy()
+        label_ids = result["labels"].cpu().numpy()
+        boxes = result["boxes"].cpu().numpy()
 
-            # V3 may provide polygon_points; V2 never does
-            polygon_points_list: Optional[List] = None
-            if want_polygons and "polygon_points" in result:
-                polygon_points_list = result["polygon_points"]
+        polygon_points_list: Optional[List] = None
+        if want_polygons and "polygon_points" in result:
+            polygon_points_list = result["polygon_points"]
 
-            if apply_nms and len(boxes) > 0:
-                keep = self._nms(boxes, scores, self.layout_nms_iou_threshold)
-                scores = scores[keep]
-                label_ids = label_ids[keep]
-                boxes = boxes[keep]
-                if polygon_points_list is not None:
-                    polygon_points_list = [polygon_points_list[i] for i in keep]
+        if apply_nms and len(boxes) > 0:
+            keep = self._nms(boxes, scores, self.layout_nms_iou_threshold)
+            scores = scores[keep]
+            label_ids = label_ids[keep]
+            boxes = boxes[keep]
+            if polygon_points_list is not None:
+                polygon_points_list = [polygon_points_list[i] for i in keep]
 
-            if layout_unclip_ratio is not None and len(boxes) > 0:
-                boxes = self._unclip_boxes(boxes, layout_unclip_ratio, w, h)
+        if layout_unclip_ratio is not None and len(boxes) > 0:
+            boxes = self._unclip_boxes(boxes, layout_unclip_ratio, w, h)
 
-            box_list: List[Dict] = []
-            for idx, (score, label_id, box) in enumerate(
-                zip(scores, label_ids, boxes)
-            ):
-                label_name = self._id2label.get(int(label_id), str(label_id))
-                x1, y1, x2, y2 = box
-                x1 = int(max(0, x1))
-                y1 = int(max(0, y1))
-                x2 = int(min(w, x2))
-                y2 = int(min(h, y2))
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                entry: Dict = {
-                    "cls_id": int(label_id),
-                    "label": label_name,
-                    "score": float(score),
-                    "coordinate": [x1, y1, x2, y2],
-                    "order": idx + 1,
-                }
-                if polygon_points_list is not None:
-                    poly = polygon_points_list[idx]
-                    if poly is not None:
-                        # Convert to plain Python list of [x, y] pairs
-                        if hasattr(poly, "tolist"):
-                            poly = poly.tolist()
-                        entry["polygon_points"] = poly
-                box_list.append(entry)
-
-            yield {
-                "input_path": None,
-                "page_index": None,
-                "boxes": box_list,
+        box_list: List[Dict] = []
+        for idx, (score, label_id, box) in enumerate(
+            zip(scores, label_ids, boxes)
+        ):
+            label_name = self._id2label.get(int(label_id), str(label_id))
+            x1, y1, x2, y2 = box
+            x1 = int(max(0, x1))
+            y1 = int(max(0, y1))
+            x2 = int(min(w, x2))
+            y2 = int(min(h, y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            entry: Dict = {
+                "cls_id": int(label_id),
+                "label": label_name,
+                "score": float(score),
+                "coordinate": [x1, y1, x2, y2],
+                "order": idx + 1,
             }
+            if polygon_points_list is not None:
+                poly = polygon_points_list[idx]
+                if poly is not None:
+                    if hasattr(poly, "tolist"):
+                        poly = poly.tolist()
+                    entry["polygon_points"] = poly
+            box_list.append(entry)
+
+        return {
+            "input_path": None,
+            "page_index": None,
+            "boxes": box_list,
+        }
 
     # ------------------------------------------------------------------
     # Private helpers

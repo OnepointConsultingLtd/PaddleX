@@ -35,20 +35,26 @@ Usage:
   # Override device for all instances:
   python hf_server.py --config ... --pool-size 2 --device cuda:0
 
+  # Layout-only (boxes + labels, no VLM), POST /layout-detection with JSON body
+  # {"images": ["<base64>", ...], "layoutShapeMode": "auto"}.
+
 Dependencies (in addition to paddlex core):
   pip install fastapi uvicorn aiohttp
 """
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import logging
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
+
+from pydantic import BaseModel, Field
+from typing_extensions import Literal
 
 import aiohttp
 import fastapi
-import pydantic
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -79,6 +85,41 @@ from paddlex.inference.serving.schemas.paddleocr_vl import (
     RestructurePagesRequest,
     RestructurePagesResult,
 )
+
+LAYOUT_DETECTION_ONLY_ENDPOINT = "/layout-detection"
+
+
+class LayoutDetectionOnlyRequest(BaseModel):
+    """Base64-encoded image pages (same encoding style as ``file`` in infer)."""
+
+    images: List[str] = Field(
+        ...,
+        min_length=1,
+        description="Each entry: raw base64 or data URL (data:image/...;base64,...).",
+    )
+    logId: Optional[str] = None
+    layoutThreshold: Optional[float] = None
+    layoutNms: Optional[bool] = None
+    layoutUnclipRatio: Optional[Union[float, Tuple[float, float], dict]] = None
+    layoutShapeMode: Literal["rect", "quad", "poly", "auto"] = "auto"
+
+
+class LayoutPageOut(BaseModel):
+    pageIndex: int
+    width: int
+    height: int
+    boxes: List[Dict[str, Any]]
+
+
+class LayoutDetectionOnlyResult(BaseModel):
+    pages: List[LayoutPageOut]
+
+
+def _decode_base64_image_payload(s: str) -> bytes:
+    if "," in s and s.strip().startswith("data:"):
+        s = s.split(",", 1)[1]
+    return base64.b64decode(s)
+
 
 # ---------------------------------------------------------------------------
 # Pipeline pool
@@ -145,8 +186,8 @@ def create_pool_app(
       2. Assembles a PipelinePool that routes to the least-busy wrapper.
       3. Opens a shared aiohttp.ClientSession for async HTTP file fetching.
 
-    Returns a FastAPI app with /health, /layout-parsing, and
-    /restructure-pages endpoints pre-registered.
+    Returns a FastAPI app with /health, /layout-parsing,
+    /restructure-pages, and /layout-detection endpoints pre-registered.
     """
 
     @contextlib.asynccontextmanager
@@ -419,6 +460,79 @@ def create_pool_app(
             ),
         )
 
+    @primary_operation(
+        app,
+        LAYOUT_DETECTION_ONLY_ENDPOINT,
+        "layoutDetectionOnly",
+    )
+    async def _layout_detection_only(
+        request: LayoutDetectionOnlyRequest,
+    ) -> AIStudioResultResponse[LayoutDetectionOnlyResult]:
+        """Layout only: bounding boxes + class labels, no VLM / OCR content."""
+        log_id = request.logId or serving_utils.generate_log_id()
+        pl0 = ctx.pipeline.pipeline
+        if getattr(pl0, "layout_det_model", None) is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Layout detection is not enabled or not available in this pipeline",
+            )
+        max_n = int(ctx.extra.get("max_num_input_imgs", 10))
+        if len(request.images) > max_n:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many images (maximum {max_n})",
+            )
+
+        imgs_bgr: List[Any] = []
+        for b64 in request.images:
+            try:
+                raw = _decode_base64_image_payload(b64)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=422, detail=f"Invalid base64 image: {e}"
+                ) from e
+            arr = serving_utils.image_bytes_to_array(raw)
+            if arr is None:
+                raise HTTPException(status_code=422, detail="Could not decode image")
+            imgs_bgr.append(arr)
+
+        pipeline = ctx.pipeline
+
+        def _layout_only() -> List[Dict[str, Any]]:
+            pl = pipeline.pipeline
+            det = getattr(pl, "layout_det_model", None)
+            if det is None:
+                raise RuntimeError("layout_det_model is not available in this pipeline")
+            out = list(
+                det(
+                    imgs_bgr,
+                    threshold=request.layoutThreshold,
+                    layout_nms=request.layoutNms,
+                    layout_unclip_ratio=request.layoutUnclipRatio,
+                    layout_shape_mode=request.layoutShapeMode,
+                )
+            )
+            return out
+
+        raw_pages = await pipeline.call(_layout_only)
+
+        pages_out: List[LayoutPageOut] = []
+        for i, page in enumerate(raw_pages):
+            h, w = imgs_bgr[i].shape[:2]
+            pages_out.append(
+                LayoutPageOut(
+                    pageIndex=i,
+                    width=int(w),
+                    height=int(h),
+                    boxes=page["boxes"],
+                )
+            )
+
+        return AIStudioResultResponse[LayoutDetectionOnlyResult](
+            logId=log_id,
+            result=LayoutDetectionOnlyResult(pages=pages_out),
+        )
+
     return app
 
 
@@ -486,6 +600,7 @@ def main() -> None:
     )
     print(f"  POST {INFER_ENDPOINT}          — run inference")
     print(f"  POST {RESTRUCTURE_PAGES_ENDPOINT}  — restructure pages")
+    print(f"  POST {LAYOUT_DETECTION_ONLY_ENDPOINT}  — layout boxes only (batched)")
     print(f"  GET  /health                    — health check")
 
     app_config = AppConfig(visualize=not args.no_visualize)

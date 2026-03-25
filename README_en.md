@@ -764,6 +764,7 @@ To use the Python script for other pipelines, simply adjust the `pipeline` param
 
   * [📦 PaddlePaddle Installation](https://paddlepaddle.github.io/PaddleX/latest/en/installation/paddlepaddle_install.html)
   * [📦 PaddleX Installation](https://paddlepaddle.github.io/PaddleX/latest/en/installation/installation.html)
+  * [🧩 PaddleOCR-VL HuggingFace server (`hf_server`, Docker, Windows/Linux/ARM)](./docs/INSTALL_PADDLEOCR_VL_HF.md)
 
 </details>
 

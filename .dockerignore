@@ -1,0 +1,11 @@
+# Speed up `docker build -f deploy/docker/paddleocr-vl-hf/Dockerfile .`
+.venv
+venv
+.git
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.idea
+.vscode

@@ -761,6 +761,7 @@ for res in output:
 
   * [📦 PaddlePaddle 安装教程](https://paddlepaddle.github.io/PaddleX/latest/installation/paddlepaddle_install.html)
   * [📦 PaddleX 安装教程](https://paddlepaddle.github.io/PaddleX/latest/installation/installation.html)
+  * [🧩 PaddleOCR-VL HuggingFace 服务（hf_server、Docker、Windows/Linux/ARM）](./docs/INSTALL_PADDLEOCR_VL_HF.md)
 
 </details>
 
