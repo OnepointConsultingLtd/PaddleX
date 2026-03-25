@@ -536,6 +536,34 @@ def create_pool_app(
     return app
 
 
+def _get_inner_pipeline(pipeline: Any) -> Any:
+    """Reach the inner _PaddleOCRVLPipeline through the AutoParallel* wrapper."""
+    if hasattr(pipeline, "_pipeline"):
+        return pipeline._pipeline
+    return pipeline
+
+
+def _share_layout_detector(pipelines: list) -> None:
+    """Replace every pipeline's layout_det_model with the first one's.
+
+    This avoids loading N copies of PP-DocLayoutV3 on the same GPU, which
+    exhausts cuDNN workspace memory.  The _GPU_LOCK inside HFLayoutDetector
+    already serialises the forward pass, so a single shared instance is
+    thread-safe.
+    """
+    if len(pipelines) <= 1:
+        return
+    inner_first = _get_inner_pipeline(pipelines[0])
+    shared_det = getattr(inner_first, "layout_det_model", None)
+    if shared_det is None:
+        return
+    for p in pipelines[1:]:
+        inner = _get_inner_pipeline(p)
+        if hasattr(inner, "layout_det_model"):
+            inner.layout_det_model = shared_det
+    print(f"  Shared layout detector across {len(pipelines)} pool instance(s)")
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -593,6 +621,14 @@ def main() -> None:
     for i in range(args.pool_size):
         print(f"  Loading instance {i + 1}/{args.pool_size}...")
         pipelines.append(create_pipeline(pipeline=args.config, device=args.device))
+
+    # Share a single layout-detector across all pool instances.
+    # cuDNN batch-norm is not safe with multiple model copies on the same GPU:
+    # loading N copies exhausts GPU workspace memory and causes
+    # CUDNN_STATUS_NOT_SUPPORTED_SUBLIBRARY_UNAVAILABLE.
+    # A module-level _GPU_LOCK in HFLayoutDetector already serialises
+    # the forward pass, so sharing one model is safe and correct.
+    _share_layout_detector(pipelines)
 
     print(
         f"All {args.pool_size} pipeline instance(s) loaded. "
