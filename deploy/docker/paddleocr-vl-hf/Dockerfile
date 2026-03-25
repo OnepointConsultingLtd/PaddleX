@@ -46,4 +46,4 @@ EXPOSE 8080
 # Default: single worker; increase pool or point config at vLLM backend via env override.
 ENV PADDLEX_HF_CONFIG=paddlex/configs/pipelines/PaddleOCR-VL-HF.yaml
 
-CMD ["sh", "-c", "python hf_server.py --config \"${PADDLEX_HF_CONFIG}\" --host 0.0.0.0 --port 8080 --pool-size 1"]
+CMD ["sh", "-c", "python hf_server.py --config \"${PADDLEX_HF_CONFIG}\" --host 0.0.0.0 --port 8080 --pool-size 2"]
