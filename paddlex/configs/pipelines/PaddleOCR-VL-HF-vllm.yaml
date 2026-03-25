@@ -46,11 +46,27 @@ SubModules:
     # HuggingFace backend for PP-DocLayoutV3
     # ---------------------------------------------------------------
     use_hf_backend: true
+  # model_version selects which transformers classes are loaded:
+    #
+    #   "v2"  →  PPDocLayoutV2ForObjectDetection
+    #            Outputs bounding boxes only (no polygon masks).
+    #            Lighter and faster; good for well-scanned flat documents.
+    #            HF repo: PaddlePaddle/PP-DocLayoutV2_safetensors
+    #
+    #   "v3"  →  PPDocLayoutV3ForObjectDetection
+    #            Outputs bounding boxes + polygon points from instance masks.
+    #            Better for skewed, curved, or screen-photographed documents.
+    #            HF repo: PaddlePaddle/PP-DocLayoutV3_safetensors
+    #
+    #   null / omit  →  auto-detected from the model's config.json
+    #
+    model_version: "v3"   # change to "v2" to use PP-DocLayoutV2
 
-    # Path to a local directory that contains the HF-format model, or a
-    # HuggingFace Hub repo id (e.g. "PaddlePaddle/PP-DocLayoutV3").
-    # Set to a local path or a HuggingFace Hub repo id.
-    # The repo id "PaddlePaddle/PP-DocLayoutV3" will auto-download on first run.
+
+  
+    # Local directory path OR HuggingFace Hub repo id (auto-downloads).
+    # V3:  "PaddlePaddle/PP-DocLayoutV3_safetensors"
+    # V2:  "PaddlePaddle/PP-DocLayoutV2_safetensors"
     model_dir: "PaddlePaddle/PP-DocLayoutV3_safetensors"
 
     # Device: "cpu", "gpu", "gpu:0", "cuda", "cuda:0"
