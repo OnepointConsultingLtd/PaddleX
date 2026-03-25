@@ -164,11 +164,7 @@ Same as Linux x86_64 (`hf_server.py` + `curl` health check). Expect layout/VLM w
 
 ## Docker (Linux x86_64 + NVIDIA GPU)
 
-The Dockerfile uses **`nvcr.io/nvidia/vllm:26.02-py3`** (NVIDIA NGC “vLLM” container). The base image ships CUDA-capable **PyTorch**; dependency installation uses **[Astral uv](https://docs.astral.sh/uv/)** (`uv venv` + `uv pip install …`) so resolution matches a typical **uv** workflow on the host (plain `pip` in Docker often mis-resolves against this stack).
-
-Installed inside the image (in order): `transformers`, `torchvision`, `accelerate`, `filetype`, editable **`paddlex[ocr,ocr-hf,serving]`**, and **`openai`** (for the vLLM / genai client path).
-
-**Defaults:** `PADDLEX_HF_CONFIG=paddlex/configs/pipelines/PaddleOCR-VL-HF-vllm.yaml`, **`pool-size 2`**. Override `PADDLEX_HF_CONFIG` for the full in-process HF VLM config (`PaddleOCR-VL-HF.yaml`).
+The Dockerfile uses **`nvcr.io/nvidia/vllm:26.02-py3`** (NVIDIA NGC “vLLM” container). It already includes a CUDA-capable PyTorch stack; the build adds **transformers**, **torchvision**, and an editable **PaddleX** install with `[ocr,ocr-hf,serving]`.
 
 ### Prerequisites
 
@@ -201,17 +197,18 @@ docker run --gpus all --rm -p 8080:8080 \
   paddlex-paddleocr-vl-hf:latest
 ```
 
-The default image already uses **`PaddleOCR-VL-HF-vllm.yaml`**. To switch to the full HuggingFace in-process VLM (`PaddleOCR-VL-HF.yaml`):
+Use a different pipeline config (e.g. vLLM backend pointing at a host OpenAI-compatible server):
 
 ```bash
 docker run --gpus all --rm -p 8080:8080 \
   -e PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=true \
-  -e PADDLEX_HF_CONFIG=paddlex/configs/pipelines/PaddleOCR-VL-HF.yaml \
+  -e PADDLEX_HF_CONFIG=paddlex/configs/pipelines/PaddleOCR-VL-HF-vllm.yaml \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --add-host=host.docker.internal:host-gateway \
   paddlex-paddleocr-vl-hf:latest
 ```
 
-For vLLM on the host, point `genai_config.server_url` in `PaddleOCR-VL-HF-vllm.yaml` at reachable hostnames (e.g. `--add-host=host.docker.internal:host-gateway` on Docker Desktop).
+(Adjust `genai_config.server_url` in the YAML so the container can reach your vLLM/OpenAI server.)
 
 ### Docker health test
 
