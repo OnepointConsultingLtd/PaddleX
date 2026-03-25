@@ -227,6 +227,21 @@ curl -s -X POST http://127.0.0.1:8080/layout-detection \
   -d "{\"images\":[\"$IMG_B64\"],\"layoutShapeMode\":\"auto\"}"
 ```
 
+### Batch layout client (directory → JSON)
+
+`scripts/layout_detection_client.py` walks an input directory, calls `POST /layout-detection` in configurable batch sizes and parallel requests, and writes one JSON per image (`.json` next to the same relative path under `--output-dir`). It prints per-batch timing and a summary (stdlib only; no `requests`).
+
+```bash
+python scripts/layout_detection_client.py \
+  --base-url http://127.0.0.1:8080 \
+  --input-dir ./images \
+  --output-dir ./layout_json \
+  --images-per-request 4 \
+  --parallel 2
+```
+
+Use `--recursive` for subfolders.
+
 ### ARM64 / Apple Silicon Docker
 
 Building this **GPU Dockerfile** on **arm64** often fails or runs without NVIDIA GPU support because the **base image is aimed at amd64 + CUDA**. For ARM64, prefer the **native Linux ARM64** section above, or build a **CPU-only** image yourself (e.g. `FROM python:3.12-slim`) and install `torch`/`torchvision` for `aarch64` manually.
@@ -249,6 +264,7 @@ Building this **GPU Dockerfile** on **arm64** often fails or runs without NVIDIA
 | File | Role |
 |------|------|
 | `hf_server.py` | Pooling HTTP server (`/layout-parsing`, `/layout-detection`, …) |
+| `scripts/layout_detection_client.py` | Batch client for `/layout-detection` (dirs + stats) |
 | `deploy/docker/paddleocr-vl-hf/Dockerfile` | GPU Docker image |
 | `paddlex/configs/pipelines/PaddleOCR-VL-HF.yaml` | Full HF layout + HF VLM |
 | `paddlex/configs/pipelines/PaddleOCR-VL-HF-vllm.yaml` | HF layout + remote vLLM for VLM |
